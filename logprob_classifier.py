@@ -92,40 +92,129 @@ class IntentConfig:
 
 
 class TokenMapper:
-    """Handles mapping between OpenAI tokens and intent categories."""
+    """Enhanced token mapper with distinctive tokens and confidence scoring."""
     
     def __init__(self):
-        # Token mappings discovered through testing with GPT-4.1-nano
-        # These mappings handle both full tokens and partial tokens the model produces
+        # Enhanced token mappings with longer, more distinctive tokens
+        # Priority: longer tokens > shorter tokens for better disambiguation
         self.token_to_intent = {
-            # Full tokens that work reliably
-            "FACT": "fact_lookup_qa",
-            "COMPARE": "comparison_decision_support",
-            
-            # Partial tokens the model actually produces
-            "CON": "concept_explanation",      # for CONCEPT
-            "NAV": "document_navigation",      # for NAVIGATE  
-            "SUM": "summarization_digest",     # for SUMMARIZE
-            "IN": "instruction_procedure",     # for INSTRUCT
-            "RE": "rewrite_transform",         # for REWRITE
-            "D": "creative_generation",        # for DRAFT
-            "EX": "data_extraction_structuring", # for EXTRACT
-            "CL": "meta_clarification",        # for CLARIFY
-            
-            # Full word backups (less common but possible)
-            "CONCEPT": "concept_explanation",
+            # High-confidence distinctive tokens (primary)
+            "CONCEPTUAL": "concept_explanation",
+            "FACTUAL": "fact_lookup_qa", 
             "NAVIGATE": "document_navigation",
             "SUMMARIZE": "summarization_digest",
-            "INSTRUCT": "instruction_procedure", 
-            "REWRITE": "rewrite_transform",
+            "COMPARISON": "comparison_decision_support",
+            "INSTRUCTION": "instruction_procedure",
+            "REWRITE": "rewrite_transform", 
+            "CREATIVE": "creative_generation",
+            "EXTRACTION": "data_extraction_structuring",
+            "CLARIFICATION": "meta_clarification",
+            
+            # Medium-confidence tokens (fallback)
+            "CONCEPT": "concept_explanation",
+            "FACT": "fact_lookup_qa",
+            "NAV": "document_navigation", 
+            "SUM": "summarization_digest",
+            "COMPARE": "comparison_decision_support",
+            "INSTRUCT": "instruction_procedure",
+            "REWRITING": "rewrite_transform",
             "DRAFT": "creative_generation",
             "EXTRACT": "data_extraction_structuring",
-            "CLARIFY": "meta_clarification"
+            "CLARIFY": "meta_clarification",
+            
+            # Low-confidence tokens (backup)
+            "CON": "concept_explanation",
+            "FAC": "fact_lookup_qa",
+            "DOC": "document_navigation",
+            "SUMM": "summarization_digest", 
+            "COMP": "comparison_decision_support",
+            "PROC": "instruction_procedure",
+            "REW": "rewrite_transform",
+            "GEN": "creative_generation", 
+            "DATA": "data_extraction_structuring",
+            "META": "meta_clarification",
+            
+            # Legacy tokens for backward compatibility
+            "IN": "instruction_procedure",
+            "RE": "rewrite_transform", 
+            "D": "creative_generation",
+            "EX": "data_extraction_structuring",
+            "CL": "meta_clarification"
+        }
+        
+        # Token confidence scores based on distinctiveness
+        self.token_confidence = {
+            # High confidence: long, distinctive tokens
+            "CONCEPTUAL": 0.95, "FACTUAL": 0.95, "NAVIGATE": 0.95,
+            "SUMMARIZE": 0.95, "COMPARISON": 0.95, "INSTRUCTION": 0.95,
+            "REWRITE": 0.95, "CREATIVE": 0.95, "EXTRACTION": 0.95,
+            "CLARIFICATION": 0.95,
+            
+            # Medium confidence: standard tokens
+            "CONCEPT": 0.85, "FACT": 0.85, "NAV": 0.80,
+            "SUM": 0.80, "COMPARE": 0.85, "INSTRUCT": 0.85,
+            "REWRITING": 0.85, "DRAFT": 0.85, "EXTRACT": 0.85,
+            "CLARIFY": 0.85,
+            
+            # Lower confidence: shorter or ambiguous tokens
+            "CON": 0.70, "FAC": 0.70, "DOC": 0.75,
+            "SUMM": 0.75, "COMP": 0.70, "PROC": 0.75,
+            "REW": 0.65, "GEN": 0.60, "DATA": 0.70,
+            "META": 0.70,
+            
+            # Legacy tokens (lowest confidence)
+            "IN": 0.50, "RE": 0.45, "D": 0.40,
+            "EX": 0.55, "CL": 0.50
         }
     
     def map_token_to_intent(self, token: str) -> Optional[str]:
         """Map a token to an intent category."""
         return self.token_to_intent.get(token.strip().upper())
+    
+    def get_token_confidence(self, token: str) -> float:
+        """Get confidence score for a token."""
+        return self.token_confidence.get(token.strip().upper(), 0.3)  # Default low confidence
+    
+    def map_token_with_confidence(self, token: str) -> Tuple[Optional[str], float]:
+        """Map token to intent and return confidence score."""
+        clean_token = token.strip().upper()
+        intent = self.token_to_intent.get(clean_token)
+        confidence = self.token_confidence.get(clean_token, 0.3)
+        return intent, confidence
+    
+    def map_token_sequence(self, tokens: List[str]) -> Dict[str, float]:
+        """
+        Map a sequence of tokens to intents with weighted confidence.
+        
+        Args:
+            tokens: List of token strings
+            
+        Returns:
+            Dictionary mapping intents to weighted confidence scores
+        """
+        intent_scores = {}
+        total_weight = 0.0
+        
+        for i, token in enumerate(tokens):
+            intent, confidence = self.map_token_with_confidence(token)
+            if intent:
+                # Weight tokens by position (first token gets highest weight)
+                position_weight = 1.0 / (i + 1)  # 1.0, 0.5, 0.33, etc.
+                weighted_score = confidence * position_weight
+                
+                if intent in intent_scores:
+                    # Combine scores (take maximum for now)
+                    intent_scores[intent] = max(intent_scores[intent], weighted_score)
+                else:
+                    intent_scores[intent] = weighted_score
+                
+                total_weight += position_weight
+        
+        # Normalize scores by total weight
+        if total_weight > 0:
+            intent_scores = {intent: score/total_weight for intent, score in intent_scores.items()}
+        
+        return intent_scores
     
     def validate_token_mappings(self) -> Dict[str, List[str]]:
         """
@@ -188,12 +277,25 @@ class ClassificationResult:
     uncertainty: float
     confidence_level: str  # "high", "medium", "low"
     
+    # Enhanced multi-token analysis fields
+    model_tokens: List[str] = None  # Raw tokens from model response
+    token_analysis: List[Dict] = None  # Detailed token analysis
+    sequence_confidence: float = 0.0  # Confidence from token sequence analysis
+    
     def get_display_intent(self) -> str:
         """Get formatted display name for the predicted intent."""
         return IntentConfig.INTENT_DISPLAY_NAMES.get(
             self.predicted_intent, 
             self.predicted_intent.replace("_", " ").title()
         )
+    
+    def get_token_summary(self) -> str:
+        """Get a summary of the token analysis."""
+        if not self.model_tokens:
+            return "Single token analysis"
+        
+        token_str = " → ".join([t.strip().upper() for t in self.model_tokens])
+        return f"Multi-token: {token_str} (sequence confidence: {self.sequence_confidence:.3f})"
 
 
 class LogprobClassifier:
@@ -266,18 +368,54 @@ class LogprobClassifier:
             predicted_intent = max(distribution.items(), key=lambda x: x[1])[0]
             confidence = distribution[predicted_intent]
             
-            # Log the actual model token for debugging
+            # Log the actual model tokens and analysis for debugging
             if response.choices[0].logprobs and response.choices[0].logprobs.content:
-                model_token = response.choices[0].message.content.strip().upper()
-                logger.info("Intent classified", 
-                           model_token=model_token,
+                model_response = response.choices[0].message.content.strip()
+                model_tokens = [pos.token for pos in response.choices[0].logprobs.content if pos.top_logprobs]
+                
+                # Calculate token confidence scores
+                token_analysis = []
+                for token in model_tokens:
+                    intent, conf = self.token_mapper.map_token_with_confidence(token)
+                    token_analysis.append({
+                        "token": token.strip().upper(),
+                        "intent": intent,
+                        "confidence": conf
+                    })
+                
+                logger.info("Enhanced intent classification", 
+                           model_response=model_response,
+                           token_analysis=token_analysis,
                            predicted_intent=predicted_intent,
-                           confidence=confidence)
+                           confidence=confidence,
+                           num_tokens=len(model_tokens))
             
             # Calculate additional metrics
             uncertainty = self._calculate_uncertainty(distribution)
             confidence_level = self._get_confidence_level(confidence)
             processing_path = self._get_processing_path(predicted_intent)
+            
+            # Extract token information for enhanced analysis
+            model_tokens = []
+            token_analysis = []
+            sequence_confidence = 0.0
+            
+            if response.choices[0].logprobs and response.choices[0].logprobs.content:
+                model_tokens = [pos.token for pos in response.choices[0].logprobs.content if pos.top_logprobs]
+                
+                for token in model_tokens:
+                    intent, conf = self.token_mapper.map_token_with_confidence(token)
+                    token_analysis.append({
+                        "token": token.strip().upper(),
+                        "intent": intent,
+                        "confidence": conf
+                    })
+                
+                # Calculate sequence confidence if multiple tokens
+                if len(model_tokens) > 1:
+                    sequence_scores = self.token_mapper.map_token_sequence([t.strip() for t in model_tokens])
+                    if predicted_intent in sequence_scores:
+                        sequence_confidence = sequence_scores[predicted_intent]
             
             result = ClassificationResult(
                 query=query,
@@ -286,7 +424,10 @@ class LogprobClassifier:
                 distribution=distribution,
                 processing_path=processing_path,
                 uncertainty=uncertainty,
-                confidence_level=confidence_level
+                confidence_level=confidence_level,
+                model_tokens=model_tokens,
+                token_analysis=token_analysis,
+                sequence_confidence=sequence_confidence
             )
             
             # Cache the result
@@ -300,41 +441,98 @@ class LogprobClassifier:
             return self._create_fallback_result(query)
     
     def _make_api_call(self, query: str):
-        """Make the OpenAI API call with logprobs."""
-        prompt = f"""Classify this query. Respond with ONLY one word from: CONCEPT, FACT, NAVIGATE, SUMMARIZE, COMPARE, INSTRUCT, REWRITE, DRAFT, EXTRACT, CLARIFY
+        """Make the OpenAI API call with logprobs for multi-token responses."""
+        prompt = f"""Classify this user query into one of these intent categories. Respond with 1-2 words using these distinctive tokens:
+
+Primary tokens (use these first): CONCEPTUAL, FACTUAL, NAVIGATE, SUMMARIZE, COMPARISON, INSTRUCTION, REWRITE, CREATIVE, EXTRACTION, CLARIFICATION
+
+Secondary tokens (if primary unclear): CONCEPT, FACT, NAV, SUM, COMPARE, INSTRUCT, DRAFT, EXTRACT, CLARIFY
+
+Examples:
+- "What is machine learning?" → CONCEPTUAL
+- "When was Python created?" → FACTUAL  
+- "Find the sales report" → NAVIGATE
+- "Summarize this document" → SUMMARIZE
+- "Compare these options" → COMPARISON
+- "How to install software?" → INSTRUCTION
+- "Rewrite this email" → REWRITE
+- "Write a poem" → CREATIVE
+- "Extract the data" → EXTRACTION
+- "What do you mean?" → CLARIFICATION
 
 Query: "{query}"
 
-Answer:"""
+Classification:"""
         
         return self.client.chat.completions.create(
             model="gpt-4.1-nano",
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
-            max_tokens=1,
+            max_tokens=3,  # Allow up to 3 tokens for more nuanced responses
             logprobs=True,
-            top_logprobs=10
+            top_logprobs=15  # Increased to capture more token alternatives
         )
     
 
     
     def _create_complete_distribution(self, response) -> Dict[str, float]:
-        """Create a complete probability distribution over all intents."""
+        """Create a complete probability distribution over all intents using multi-token analysis."""
         # Initialize all intents with tiny probabilities
         distribution = {intent: 1e-10 for intent in self.config.INTENT_CATEGORIES}
         
         if response.choices[0].logprobs and response.choices[0].logprobs.content:
-            top_logprobs = response.choices[0].logprobs.content[0].top_logprobs
+            # Extract all tokens from the response
+            response_tokens = []
+            total_token_probability = 0.0
             
-            # Add actual probabilities from logprobs
-            for token_info in top_logprobs:
-                token = token_info.token.strip().upper()
-                probability = math.exp(token_info.logprob)
+            # Process each token position in the response
+            for token_position in response.choices[0].logprobs.content:
+                position_probs = {}
                 
-                # Map to intent if valid
-                intent = self.token_mapper.map_token_to_intent(token)
-                if intent and intent in distribution:
-                    distribution[intent] = probability
+                # Get probabilities for all top tokens at this position
+                for token_info in token_position.top_logprobs:
+                    token = token_info.token.strip().upper()
+                    probability = math.exp(token_info.logprob)
+                    
+                    # Map token to intent with confidence
+                    intent, token_confidence = self.token_mapper.map_token_with_confidence(token)
+                    if intent:
+                        # Apply token confidence weighting
+                        weighted_prob = probability * token_confidence
+                        
+                        if intent in position_probs:
+                            position_probs[intent] += weighted_prob
+                        else:
+                            position_probs[intent] = weighted_prob
+                
+                # Add position probabilities to overall distribution
+                # Weight by position: first token = 1.0, second = 0.7, third = 0.4
+                position_weight = max(0.4, 1.0 - (len(response_tokens) * 0.3))
+                
+                for intent, prob in position_probs.items():
+                    if intent in distribution:
+                        distribution[intent] += prob * position_weight
+                
+                response_tokens.append(position_probs)
+            
+            # If we have multiple tokens, also try sequence analysis
+            if len(response_tokens) > 1:
+                # Extract the actual token sequence from response
+                actual_tokens = []
+                for token_position in response.choices[0].logprobs.content:
+                    if token_position.top_logprobs:
+                        # Take the most likely token at this position
+                        best_token = max(token_position.top_logprobs, key=lambda x: x.logprob)
+                        actual_tokens.append(best_token.token.strip())
+                
+                # Analyze token sequence
+                sequence_scores = self.token_mapper.map_token_sequence(actual_tokens)
+                
+                # Blend sequence scores with individual token scores
+                for intent, score in sequence_scores.items():
+                    if intent in distribution:
+                        # Give sequence analysis 30% weight
+                        distribution[intent] = distribution[intent] * 0.7 + score * 0.3
         
         # Normalize to ensure probabilities sum to 1.0
         total_prob = sum(distribution.values())
@@ -378,7 +576,10 @@ Answer:"""
             distribution=distribution,
             processing_path="LLM-only",
             uncertainty=1.0,
-            confidence_level="low"
+            confidence_level="low",
+            model_tokens=[],
+            token_analysis=[],
+            sequence_confidence=0.0
         )
 
 
@@ -401,6 +602,18 @@ class ResultFormatter:
         # Basic results
         output.append(f"🎯 Predicted Intent: {result.get_display_intent()}")
         output.append(f"📊 Confidence: {result.confidence:.3f} ({result.confidence:.1%})")
+        
+        # Enhanced token analysis
+        if result.model_tokens and len(result.model_tokens) > 0:
+            output.append(f"🔤 Token Analysis: {result.get_token_summary()}")
+            
+            if result.token_analysis and len(result.token_analysis) > 1:
+                output.append("   Token Details:")
+                for i, token_info in enumerate(result.token_analysis):
+                    token = token_info['token']
+                    intent = token_info['intent'] or 'Unknown'
+                    conf = token_info['confidence']
+                    output.append(f"   {i+1}. {token} → {intent} (confidence: {conf:.2f})")
         
         # Confidence level with emoji
         CONFIDENCE_EMOJI = {
@@ -444,6 +657,13 @@ class ResultFormatter:
         # Processing path recommendation
         output.append(f"\n🛣️ Suggested Processing Path:")
         output.append(f"   → {result.processing_path}")
+        
+        # Enhancement info
+        if result.model_tokens and len(result.model_tokens) > 1:
+            output.append(f"\n🔬 Enhanced Analysis:")
+            output.append(f"   • Multi-token response analyzed ({len(result.model_tokens)} tokens)")
+            output.append(f"   • Sequence confidence: {result.sequence_confidence:.3f}")
+            output.append(f"   • Token-level confidence weighting applied")
         
         return "\n".join(output)
     
